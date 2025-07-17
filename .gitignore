@@ -309,3 +309,4 @@ FodyWeavers.xsd
 
 # Temporary files
 appsettings_new.json
+appsettings.local.json

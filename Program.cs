@@ -13,6 +13,7 @@ class Program
         // Load configuration from appsettings.json
         var configuration = new ConfigurationBuilder()
             .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
+            .AddJsonFile("appsettings.local.json", optional: true, reloadOnChange: true)
             .Build();
 
         string connectionString = configuration["EventHub:ConnectionString"] ?? 
@@ -22,7 +23,7 @@ class Program
         
         bool useAppGateway = bool.Parse(configuration["EventHub:UseAppGateway"] ?? "false");
         string? appGatewayEndpoint = configuration["EventHub:AppGatewayEndpoint"];
-        int appGatewayPort = int.Parse(configuration["EventHub:AppGatewayPort"] ?? "5672");
+        int appGatewayPort = int.Parse(configuration["EventHub:AppGatewayPort"] ?? "5671");
 
         Console.WriteLine("Starting Event Hub sender...");
         Console.WriteLine($"Event Hub Name: {eventHubName}");
@@ -32,10 +33,8 @@ class Program
         {
             if (useAppGateway && !string.IsNullOrEmpty(appGatewayEndpoint))
             {
-                // Modify connection string to use App Gateway endpoint
-                string modifiedConnectionString = ModifyConnectionStringForAppGateway(connectionString, appGatewayEndpoint, appGatewayPort);
                 Console.WriteLine($"App Gateway Endpoint: {appGatewayEndpoint}:{appGatewayPort}");
-                await SendEventsViaAppGateway(modifiedConnectionString, eventHubName);
+                await SendEventsViaAppGateway(connectionString, eventHubName, appGatewayEndpoint, appGatewayPort);
             }
             else
             {
@@ -52,29 +51,7 @@ class Program
         Console.ReadKey();
     }
 
-    static string ModifyConnectionStringForAppGateway(string originalConnectionString, string appGatewayEndpoint, int port)
-    {
-        // Parse the original connection string and replace the endpoint with App Gateway
-        var match = Regex.Match(originalConnectionString, @"Endpoint=sb://([^/;]+)/");
-        if (!match.Success)
-        {
-            throw new InvalidOperationException("Could not parse the Event Hub connection string endpoint");
-        }
 
-        string originalEndpoint = match.Groups[1].Value;
-        string newEndpoint = $"{appGatewayEndpoint}:{port}";
-        
-        // Replace the endpoint in the connection string
-        string modifiedConnectionString = originalConnectionString.Replace(
-            $"Endpoint=sb://{originalEndpoint}/", 
-            $"Endpoint=sb://{newEndpoint}/"
-        );
-
-        Console.WriteLine($"Original endpoint: {originalEndpoint}");
-        Console.WriteLine($"App Gateway endpoint: {newEndpoint}");
-        
-        return modifiedConnectionString;
-    }
 
     static async Task SendEventsDirectly(string connectionString, string eventHubName)
     {
@@ -109,9 +86,21 @@ class Program
         }
     }
 
-    static async Task SendEventsViaAppGateway(string modifiedConnectionString, string eventHubName)
+    static async Task SendEventsViaAppGateway(string connectionString, string eventHubName, string appGatewayEndpoint, int appGatewayPort)
     {
-        await using (var producerClient = new EventHubProducerClient(modifiedConnectionString, eventHubName))
+        // Create EventHubClientOptions with custom endpoint address
+        var clientOptions = new EventHubProducerClientOptions
+        {
+            ConnectionOptions = new EventHubConnectionOptions
+            {
+                CustomEndpointAddress = new Uri($"sb://{appGatewayEndpoint}:{appGatewayPort}")
+            }
+        };
+
+        Console.WriteLine($"Using custom endpoint: sb://{appGatewayEndpoint}:{appGatewayPort}");
+        Console.WriteLine($"Original connection string endpoint preserved for authentication");
+
+        await using (var producerClient = new EventHubProducerClient(connectionString, eventHubName, clientOptions))
         {
             // Create a batch of events
             using EventDataBatch eventBatch = await producerClient.CreateBatchAsync();
@@ -138,7 +127,7 @@ class Program
 
             // Send the batch of events to the event hub through App Gateway
             await producerClient.SendAsync(eventBatch);
-            Console.WriteLine($"Successfully sent {eventBatch.Count} events to Event Hub: {eventHubName} (via App Gateway on port 5671)");
+            Console.WriteLine($"Successfully sent {eventBatch.Count} events to Event Hub: {eventHubName} (via App Gateway on port {appGatewayPort})");
         }
     }
 }
