@@ -24,17 +24,19 @@ class Program
         bool useAppGateway = bool.Parse(configuration["EventHub:UseAppGateway"] ?? "false");
         string? appGatewayEndpoint = configuration["EventHub:AppGatewayEndpoint"];
         int appGatewayPort = int.Parse(configuration["EventHub:AppGatewayPort"] ?? "5671");
+        bool useWebSockets = bool.Parse(configuration["EventHub:UseWebSockets"] ?? "false");
 
         Console.WriteLine("Starting Event Hub sender...");
         Console.WriteLine($"Event Hub Name: {eventHubName}");
         Console.WriteLine($"Using App Gateway: {useAppGateway}");
+        Console.WriteLine($"Transport: {(useWebSockets ? "WebSockets (Port 443)" : "AMQP (Port 5671)")}");
 
         try
         {
             if (useAppGateway && !string.IsNullOrEmpty(appGatewayEndpoint))
             {
                 Console.WriteLine($"App Gateway Endpoint: {appGatewayEndpoint}:{appGatewayPort}");
-                await SendEventsViaAppGateway(connectionString, eventHubName, appGatewayEndpoint, appGatewayPort);
+                await SendEventsViaAppGateway(connectionString, eventHubName, appGatewayEndpoint, appGatewayPort, useWebSockets);
             }
             else
             {
@@ -86,18 +88,21 @@ class Program
         }
     }
 
-    static async Task SendEventsViaAppGateway(string connectionString, string eventHubName, string appGatewayEndpoint, int appGatewayPort)
+    static async Task SendEventsViaAppGateway(string connectionString, string eventHubName, string appGatewayEndpoint, int appGatewayPort, bool useWebSockets)
     {
-        // Create EventHubClientOptions with custom endpoint address
+        // Create EventHubClientOptions with custom endpoint address and transport type
         var clientOptions = new EventHubProducerClientOptions
         {
             ConnectionOptions = new EventHubConnectionOptions
             {
-                CustomEndpointAddress = new Uri($"sb://{appGatewayEndpoint}:{appGatewayPort}")
+                CustomEndpointAddress = new Uri($"sb://{appGatewayEndpoint}:{appGatewayPort}"),
+                TransportType = useWebSockets ? EventHubsTransportType.AmqpWebSockets : EventHubsTransportType.AmqpTcp
             }
         };
 
+        string transportInfo = useWebSockets ? "WebSockets over HTTPS" : "AMQP over TCP";
         Console.WriteLine($"Using custom endpoint: sb://{appGatewayEndpoint}:{appGatewayPort}");
+        Console.WriteLine($"Transport: {transportInfo}");
         Console.WriteLine($"Original connection string endpoint preserved for authentication");
 
         await using (var producerClient = new EventHubProducerClient(connectionString, eventHubName, clientOptions))
@@ -106,9 +111,10 @@ class Program
             using EventDataBatch eventBatch = await producerClient.CreateBatchAsync();
 
             // Add events to the batch
-            var event1 = new EventData(Encoding.UTF8.GetBytes($"Event 1 via App Gateway - Timestamp: {DateTime.UtcNow}"));
-            var event2 = new EventData(Encoding.UTF8.GetBytes($"Event 2 via App Gateway - Random value: {new Random().Next(1, 1000)}"));
-            var event3 = new EventData(Encoding.UTF8.GetBytes($"Event 3 via App Gateway - Message: Hello from C# Event Hub sender via App Gateway!"));
+            string transportType = useWebSockets ? "WebSockets" : "AMQP";
+            var event1 = new EventData(Encoding.UTF8.GetBytes($"Event 1 via App Gateway ({transportType}) - Timestamp: {DateTime.UtcNow}"));
+            var event2 = new EventData(Encoding.UTF8.GetBytes($"Event 2 via App Gateway ({transportType}) - Random value: {new Random().Next(1, 1000)}"));
+            var event3 = new EventData(Encoding.UTF8.GetBytes($"Event 3 via App Gateway ({transportType}) - Message: Hello from C# Event Hub sender via App Gateway!"));
 
             if (!eventBatch.TryAdd(event1))
             {
@@ -127,7 +133,8 @@ class Program
 
             // Send the batch of events to the event hub through App Gateway
             await producerClient.SendAsync(eventBatch);
-            Console.WriteLine($"Successfully sent {eventBatch.Count} events to Event Hub: {eventHubName} (via App Gateway on port {appGatewayPort})");
+            string portInfo = useWebSockets ? "443 (WebSockets)" : $"{appGatewayPort} (AMQP)";
+            Console.WriteLine($"Successfully sent {eventBatch.Count} events to Event Hub: {eventHubName} (via App Gateway on port {portInfo})");
         }
     }
 }
